@@ -35,7 +35,10 @@ def ensure_landmarker_model(path: str = MODEL_PATH) -> str:
 def create_landmarker(video: bool = True, max_faces: int = 2):
     """Create a Face Landmarker. max_faces=2 lets us detect 'extra face' cheating."""
     options = vision.FaceLandmarkerOptions(
-        base_options=mp_python.BaseOptions(model_asset_path=ensure_landmarker_model()),
+        base_options=mp_python.BaseOptions(
+            model_asset_path=ensure_landmarker_model(),
+            delegate=mp_python.BaseOptions.Delegate.CPU,
+        ),
         running_mode=vision.RunningMode.VIDEO if video else vision.RunningMode.IMAGE,
         num_faces=max_faces,
         output_face_blendshapes=True,
