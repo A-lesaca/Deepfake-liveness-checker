@@ -1,5 +1,7 @@
 opencv-python
 mediapipe==0.10.35
+flask
+Pillow
 numpy
 onnx
 onnxruntime

@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deepfake &amp; Liveness Checker</title>
+<style>
+  :root {
+    --bg: #0b0d11; --panel: #171b21; --panel-hover: #1b2029; --border: #262b34; --border-hover: #363d4a;
+    --text: #eef0f3; --muted: #8b94a3;
+    --accent: #5b8cff; --accent-dim: rgba(91,140,255,.12);
+    --good: #34c77b; --warn: #e6b34d; --bad: #ef5a5a;
+    --shadow: 0 8px 24px rgba(0,0,0,.28);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; justify-content: center; padding: 56px 16px;
+    background-image: radial-gradient(600px 300px at 50% -10%, rgba(91,140,255,.08), transparent);
+  }
+  main { width: 100%; max-width: 620px; }
+
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand svg { flex-shrink: 0; color: var(--accent); }
+  h1 { font-size: 1.35rem; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 1.05rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  p.subtitle { color: var(--muted); margin: 6px 0 0; font-size: 0.88rem; line-height: 1.5; }
+
+  section { margin-top: 48px; }
+  section:first-of-type { margin-top: 28px; }
+  hr.divider { border: none; height: 1px; margin: 48px 0 0; background: linear-gradient(90deg, transparent, var(--border), transparent); }
+
+  .dropzone {
+    margin-top: 20px; border: 1.5px dashed var(--border); border-radius: 14px;
+    padding: 40px 16px; text-align: center; cursor: pointer;
+    transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+    background: var(--panel);
+  }
+  .dropzone:hover { border-color: var(--border-hover); background: var(--panel-hover); }
+  .dropzone.drag { border-color: var(--accent); background: var(--accent-dim); box-shadow: 0 0 0 3px rgba(91,140,255,.12); }
+  .dropzone .icon-svg { color: var(--muted); margin-bottom: 10px; transition: color .18s ease; }
+  .dropzone:hover .icon-svg { color: var(--accent); }
+  .dropzone .label { font-size: 0.95rem; font-weight: 500; }
+  .dropzone .hint { color: var(--muted); font-size: 0.78rem; margin-top: 6px; letter-spacing: .01em; }
+  .dropzone .filename { color: var(--accent); font-size: 0.83rem; margin-top: 8px; word-break: break-all; }
+  input[type="file"] { display: none; }
+
+  .match-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 480px) { .match-grid { grid-template-columns: 1fr; } }
+  .match-grid .dropzone { padding: 30px 14px; }
+
+  .webcam-btn-row { text-align: center; margin-top: 16px; }
+  .link-btn {
+    background: none; border: none; color: var(--muted); font-size: 0.83rem;
+    cursor: pointer; padding: 4px; text-decoration: underline; text-underline-offset: 3px;
+    transition: color .15s ease;
+  }
+  .link-btn:hover { color: var(--accent); }
+
+  #webcam-panel { display: none; margin-top: 20px; text-align: center; }
+  #webcam-preview {
+    width: 100%; max-width: 460px; border-radius: 14px; background: #000;
+    transform: scaleX(-1); border: 1px solid var(--border); box-shadow: var(--shadow);
+  }
+  #webcam-prompt {
+    margin-top: 16px; font-size: 1rem; font-weight: 600; display: flex;
+    align-items: center; justify-content: center; gap: 8px;
+  }
+  #webcam-prompt::before {
+    content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--bad);
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+  #preview { margin-top: 20px; text-align: center; }
+  #preview img { max-width: 100%; max-height: 320px; border-radius: 12px; border: 1px solid var(--border); box-shadow: var(--shadow); }
+
+  .match-thumbs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+  .match-thumbs img { width: 100%; border-radius: 10px; border: 1px solid var(--border); }
+
+  .status { margin-top: 16px; color: var(--muted); font-size: 0.88rem; text-align: center; }
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; display: inline-block; vertical-align: middle; margin-right: 8px;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .result-card {
+    margin-top: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 22px 24px; display: none; box-shadow: var(--shadow);
+  }
+  .verdict-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .badge { padding: 6px 14px; border-radius: 999px; font-weight: 600; font-size: 0.86rem; }
+  .badge.real { background: rgba(52,199,123,.15); color: var(--good); }
+  .badge.uncertain { background: rgba(230,179,77,.15); color: var(--warn); }
+  .badge.fake { background: rgba(239,90,90,.15); color: var(--bad); }
+  .badge.noface { background: rgba(139,148,163,.15); color: var(--muted); }
+
+  .score { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+  .bar-track { margin-top: 16px; height: 8px; border-radius: 999px; background: #23272f; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 999px; transition: width .5s cubic-bezier(.4,0,.2,1); }
+
+  ul.reasons { margin: 20px 0 0; padding-left: 20px; color: var(--muted); font-size: 0.86rem; line-height: 1.6; }
+  ul.reasons li { margin-bottom: 7px; }
+  ul.reasons li::marker { color: var(--border-hover); }
+  p.reason-text { margin: 18px 0 0; color: var(--muted); font-size: 0.86rem; line-height: 1.6; }
+
+  button.action {
+    margin-top: 18px; background: var(--accent); color: #fff; border: none; border-radius: 9px;
+    padding: 10px 18px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+    transition: filter .15s ease, box-shadow .15s ease;
+  }
+  button.action:hover:not(:disabled) { filter: brightness(1.1); box-shadow: 0 4px 14px rgba(91,140,255,.3); }
+  button.action:disabled { background: #262b34; color: var(--muted); cursor: not-allowed; }
+  button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  button.secondary:hover:not(:disabled) { filter: none; border-color: var(--border-hover); background: var(--panel-hover); box-shadow: none; }
+
+  .error-box {
+    margin-top: 16px; background: rgba(239,90,90,.08); border: 1px solid rgba(239,90,90,.35);
+    color: #f29494; padding: 12px 16px; border-radius: 10px; display: none; font-size: 0.87rem;
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6l7-3z"/>
+      <path d="M9.5 12l1.8 1.8L15 10"/>
+    </svg>
+    <h1>Deepfake &amp; Liveness Checker</h1>
+  </div>
+  <p class="subtitle">Drop a photo or video to check it for signs of manipulation.</p>
+
+  <section id="check-section">
+    <div id="dropzone" class="dropzone">
+      <svg class="icon-svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 16V4M12 4l-4 4M12 4l4 4"/>
+        <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
+      </svg>
+      <div class="label">Drop a photo or video here, or click to browse</div>
+      <div class="hint">JPG · PNG · WEBP · MP4 · MOV · AVI · WEBM</div>
+      <input id="file-input" type="file" accept="image/*,video/*">
+    </div>
+
+    <div class="webcam-btn-row">
+      <button id="start-webcam-btn" class="link-btn">Or record from your webcam</button>
+    </div>
+
+    <div id="webcam-panel">
+      <video id="webcam-preview" autoplay muted playsinline></video>
+      <div id="webcam-prompt"></div>
+      <button id="cancel-webcam-btn" class="action secondary">Cancel</button>
+    </div>
+
+    <div id="preview"></div>
+    <div id="status" class="status"></div>
+    <div id="error" class="error-box"></div>
+
+    <div id="result" class="result-card">
+      <div class="verdict-row">
+        <span id="badge" class="badge">--</span>
+        <span id="score" class="score">--</span>
+      </div>
+      <div class="bar-track"><div id="bar" class="bar-fill" style="width:0%"></div></div>
+      <ul id="reasons" class="reasons"></ul>
+      <button id="download-btn" class="action secondary">Download report</button>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <section id="match-section">
+    <h2>ID / Selfie Match</h2>
+    <p class="subtitle">Check whether two photos (or a photo and a video) plausibly show the same person.</p>
+
+    <div class="match-grid">
+      <div id="dropzone-a" class="dropzone">
+        <svg class="icon-svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="5" width="18" height="14" rx="2"/>
+          <circle cx="9" cy="11" r="2"/>
+          <path d="M6 16c.6-1.6 1.8-2.4 3-2.4s2.4.8 3 2.4M15 9.5h4M15 12.5h3"/>
+        </svg>
+        <div class="label">Reference photo</div>
+        <div class="hint">e.g. an ID photo</div>
+        <div id="filename-a" class="filename"></div>
+        <input id="file-input-a" type="file" accept="image/*,video/*">
+      </div>
+      <div id="dropzone-b" class="dropzone">
+        <svg class="icon-svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="7" width="18" height="13" rx="2"/>
+          <path d="M8 7l1.5-3h5L16 7"/>
+          <circle cx="12" cy="13.5" r="3.5"/>
+        </svg>
+        <div class="label">Selfie or video</div>
+        <div class="hint">what you want to verify</div>
+        <div id="filename-b" class="filename"></div>
+        <input id="file-input-b" type="file" accept="image/*,video/*">
+      </div>
+    </div>
+
+    <button id="compare-btn" class="action" disabled>Compare faces</button>
+    <div id="match-status" class="status"></div>
+    <div id="match-error" class="error-box"></div>
+
+    <div id="match-result" class="result-card">
+      <div class="verdict-row">
+        <span id="match-badge" class="badge">--</span>
+        <span id="match-score" class="score">--</span>
+      </div>
+      <div class="bar-track"><div id="match-bar" class="bar-fill" style="width:0%"></div></div>
+      <div id="match-thumbs" class="match-thumbs"></div>
+      <p id="match-reason" class="reason-text"></p>
+    </div>
+  </section>
+
+</main>
+
+<script>
+function badgeInfo(verdict) {
+  if (verdict === "Likely real" || verdict === "Likely the same person") return ["real", verdict];
+  if (verdict === "Likely manipulated" || verdict === "Likely different people") return ["fake", verdict];
+  if (verdict === "No face found") return ["noface", verdict];
+  return ["uncertain", verdict];
+}
+
+function barColor(cls) {
+  return cls === "real" ? "var(--good)" : cls === "fake" ? "var(--bad)" : "var(--warn)";
+}
+
+function setupDropzone(zoneEl, inputEl, onFile) {
+  zoneEl.addEventListener("click", () => inputEl.click());
+  ["dragenter", "dragover"].forEach(evt =>
+    zoneEl.addEventListener(evt, e => { e.preventDefault(); zoneEl.classList.add("drag"); }));
+  ["dragleave", "drop"].forEach(evt =>
+    zoneEl.addEventListener(evt, e => { e.preventDefault(); zoneEl.classList.remove("drag"); }));
+  zoneEl.addEventListener("drop", e => {
+    if (e.dataTransfer.files.length) onFile(e.dataTransfer.files[0]);
+  });
+  inputEl.addEventListener("change", () => {
+    if (inputEl.files.length) onFile(inputEl.files[0]);
+  });
+}
+
+/* ---------- Section 1: single-file check ---------- */
+
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("file-input");
+const preview = document.getElementById("preview");
+const statusEl = document.getElementById("status");
+const errorEl = document.getElementById("error");
+const resultEl = document.getElementById("result");
+const badgeEl = document.getElementById("badge");
+const scoreEl = document.getElementById("score");
+const barEl = document.getElementById("bar");
+const reasonsEl = document.getElementById("reasons");
+const downloadBtn = document.getElementById("download-btn");
+
+let lastResult = null;
+let lastFileName = "";
+
+setupDropzone(dropzone, fileInput, handleFile);
+
+function reset() {
+  errorEl.style.display = "none";
+  resultEl.style.display = "none";
+  preview.innerHTML = "";
+}
+
+function showError(msg) {
+  errorEl.textContent = msg;
+  errorEl.style.display = "block";
+}
+
+async function handleFile(file) {
+  reset();
+  lastResult = null;
+  lastFileName = file.name;
+  statusEl.innerHTML = '<span class="spinner"></span>Analyzing...';
+
+  const form = new FormData();
+  form.append("file", file);
+
+  try {
+    const res = await fetch("/api/analyze", { method: "POST", body: form });
+    const data = await res.json();
+    statusEl.textContent = "";
+
+    if (!res.ok) {
+      showError(data.error || "Analysis failed.");
+      return;
+    }
+
+    lastResult = data;
+
+    if (data.thumbnail) {
+      preview.innerHTML = `<img src="data:image/jpeg;base64,${data.thumbnail}">`;
+    }
+
+    const [cls, label] = badgeInfo(data.verdict);
+    badgeEl.className = "badge " + cls;
+    badgeEl.textContent = label;
+
+    if (data.overall_score !== null && data.overall_score !== undefined) {
+      const pct = Math.round(data.overall_score * 100);
+      scoreEl.textContent = pct + "%";
+      barEl.style.width = pct + "%";
+      barEl.style.background = barColor(cls);
+    } else {
+      scoreEl.textContent = "--";
+      barEl.style.width = "0%";
+    }
+
+    reasonsEl.innerHTML = "";
+    (data.reasons || []).forEach(r => {
+      const li = document.createElement("li");
+      li.textContent = r;
+      reasonsEl.appendChild(li);
+    });
+
+    resultEl.style.display = "block";
+  } catch (err) {
+    statusEl.textContent = "";
+    showError("Could not reach the server: " + err.message);
+  }
+}
+
+const startWebcamBtn = document.getElementById("start-webcam-btn");
+const cancelWebcamBtn = document.getElementById("cancel-webcam-btn");
+const webcamPanel = document.getElementById("webcam-panel");
+const webcamVideo = document.getElementById("webcam-preview");
+const webcamPromptEl = document.getElementById("webcam-prompt");
+
+const WEBCAM_PROMPTS = [
+  "Blink a couple of times",
+  "Turn your head left, then right",
+  "Smile",
+  "Open your mouth",
+];
+
+let webcamStream = null;
+
+function countdownPrompt(text, seconds) {
+  return new Promise(resolve => {
+    let remaining = seconds;
+    webcamPromptEl.textContent = `${text} (${remaining}s)`;
+    const timer = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearInterval(timer);
+        resolve();
+      } else {
+        webcamPromptEl.textContent = `${text} (${remaining}s)`;
+      }
+    }, 1000);
+  });
+}
+
+function stopWebcamFlow() {
+  if (webcamStream) {
+    webcamStream.getTracks().forEach(t => t.stop());
+    webcamStream = null;
+  }
+  webcamVideo.srcObject = null;
+  webcamPanel.style.display = "none";
+  dropzone.style.display = "block";
+}
+
+cancelWebcamBtn.addEventListener("click", stopWebcamFlow);
+
+startWebcamBtn.addEventListener("click", async () => {
+  reset();
+  try {
+    webcamStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+  } catch (err) {
+    showError("Could not access the webcam: " + err.message);
+    return;
+  }
+
+  dropzone.style.display = "none";
+  webcamPanel.style.display = "block";
+  webcamVideo.srcObject = webcamStream;
+
+  const mimeCandidates = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+  const mimeType = mimeCandidates.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+  const recorder = new MediaRecorder(webcamStream, mimeType ? { mimeType } : undefined);
+  const chunks = [];
+  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  const stopped = new Promise(resolve => { recorder.onstop = resolve; });
+
+  recorder.start();
+  const chosen = [...WEBCAM_PROMPTS].sort(() => Math.random() - 0.5).slice(0, 2);
+  await countdownPrompt("Get ready...", 1);
+  for (const prompt of chosen) {
+    await countdownPrompt(prompt, 4);
+  }
+  recorder.stop();
+  await stopped;
+
+  stopWebcamFlow();
+
+  const actualType = recorder.mimeType || "video/webm";
+  const ext = actualType.includes("mp4") ? "mp4" : "webm";
+  const blob = new Blob(chunks, { type: actualType });
+  handleFile(new File([blob], `webcam-capture.${ext}`, { type: actualType }));
+});
+
+downloadBtn.addEventListener("click", () => {
+  if (!lastResult) return;
+  const [, label] = badgeInfo(lastResult.verdict);
+  const pct = lastResult.overall_score != null ? Math.round(lastResult.overall_score * 100) + "%" : "N/A";
+  const reasons = (lastResult.reasons || []).map(r => `<li>${r}</li>`).join("");
+  const img = lastResult.thumbnail
+    ? `<img src="data:image/jpeg;base64,${lastResult.thumbnail}" style="max-width:100%;border-radius:8px;">`
+    : "";
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Analysis report - ${lastFileName}</title>
+<style>body{font-family:-apple-system,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#111}
+h1{font-size:1.2rem}ul{color:#333;line-height:1.5}</style></head><body>
+<h1>Deepfake &amp; Liveness Checker -- Report</h1>
+<p><strong>File:</strong> ${lastFileName}<br>
+<strong>Generated:</strong> ${new Date().toLocaleString()}<br>
+<strong>Verdict:</strong> ${label}<br>
+<strong>Score:</strong> ${pct}</p>
+${img}
+<h2>Reasons</h2><ul>${reasons}</ul>
+<p style="color:#777;font-size:0.85rem">Heuristic analysis only unless a trained ONNX model was loaded on the server. Not a certified deepfake detector.</p>
+</body></html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `deepfake-report-${Date.now()}.html`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+
+const dropzoneA = document.getElementById("dropzone-a");
+const dropzoneB = document.getElementById("dropzone-b");
+const inputA = document.getElementById("file-input-a");
+const inputB = document.getElementById("file-input-b");
+const filenameA = document.getElementById("filename-a");
+const filenameB = document.getElementById("filename-b");
+const compareBtn = document.getElementById("compare-btn");
+const matchStatus = document.getElementById("match-status");
+const matchError = document.getElementById("match-error");
+const matchResult = document.getElementById("match-result");
+const matchBadge = document.getElementById("match-badge");
+const matchScore = document.getElementById("match-score");
+const matchBar = document.getElementById("match-bar");
+const matchThumbs = document.getElementById("match-thumbs");
+const matchReason = document.getElementById("match-reason");
+
+let fileA = null, fileB = null;
+
+setupDropzone(dropzoneA, inputA, f => { fileA = f; filenameA.textContent = f.name; updateCompareBtn(); });
+setupDropzone(dropzoneB, inputB, f => { fileB = f; filenameB.textContent = f.name; updateCompareBtn(); });
+
+function updateCompareBtn() {
+  compareBtn.disabled = !(fileA && fileB);
+}
+
+compareBtn.addEventListener("click", async () => {
+  matchError.style.display = "none";
+  matchResult.style.display = "none";
+  matchStatus.innerHTML = '<span class="spinner"></span>Comparing...';
+
+  const form = new FormData();
+  form.append("file_a", fileA);
+  form.append("file_b", fileB);
+
+  try {
+    const res = await fetch("/api/compare", { method: "POST", body: form });
+    const data = await res.json();
+    matchStatus.textContent = "";
+
+    if (!res.ok) {
+      matchError.textContent = data.error || "Comparison failed.";
+      matchError.style.display = "block";
+      return;
+    }
+
+    if (!data.faces_detected) {
+      matchBadge.className = "badge noface";
+      matchBadge.textContent = "No face found";
+      matchScore.textContent = "--";
+      matchBar.style.width = "0%";
+      matchThumbs.innerHTML = "";
+      matchReason.textContent = data.reason || "";
+      matchResult.style.display = "block";
+      return;
+    }
+
+    const [cls, label] = badgeInfo(data.verdict);
+    matchBadge.className = "badge " + cls;
+    matchBadge.textContent = label;
+
+    const pct = Math.round(data.similarity * 100);
+    matchScore.textContent = pct + "%";
+    matchBar.style.width = pct + "%";
+    matchBar.style.background = barColor(cls);
+
+    matchThumbs.innerHTML = "";
+    [data.thumbnail_a, data.thumbnail_b].forEach(t => {
+      if (t) {
+        const img = document.createElement("img");
+        img.src = `data:image/jpeg;base64,${t}`;
+        matchThumbs.appendChild(img);
+      }
+    });
+
+    matchReason.textContent = data.reason || "";
+    matchResult.style.display = "block";
+  } catch (err) {
+    matchStatus.textContent = "";
+    matchError.textContent = "Could not reach the server: " + err.message;
+    matchError.style.display = "block";
+  }
+});
+</script>
+</body>
+</html>
